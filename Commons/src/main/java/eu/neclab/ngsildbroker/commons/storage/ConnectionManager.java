@@ -17,6 +17,8 @@ import com.google.common.collect.Sets;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
+import org.flywaydb.core.api.output.MigrateResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import eu.neclab.ngsildbroker.commons.constants.AppConstants;
@@ -89,6 +91,12 @@ public class ConnectionManager {
 	boolean disableJIT;
 
 	Set<String> currentlyRunningMigrations = Sets.newHashSet();
+
+	@ConfigProperty(name = "quarkus.flyway.migrate-at-start", defaultValue = "true")
+	boolean flywayMigrateAtStart;
+
+	@ConfigProperty(name = "quarkus.flyway.validate-on-migrate", defaultValue = "true")
+	boolean flywayValidateOnMigrate;
 
 	@PostConstruct
 	void setup() throws URISyntaxException {
@@ -254,6 +262,8 @@ public class ConnectionManager {
 	private Uni<String> createDataSourceForTenantId(String tenantidvalue, boolean createDB) {
 		return findDataBaseNameByTenantId(tenantidvalue, createDB).onItem()
 				.transform(Unchecked.function(tenantDatabaseName -> {
+					logger.info("Creating data source for tenant '" + tenantidvalue + "', database '" + tenantDatabaseName + "'");
+
 					String tenantJdbcURL = DBUtil.databaseURLFromPostgresJdbcUrl(jdbcBaseUrl, tenantDatabaseName);
 					AgroalDataSourceConfigurationSupplier configuration = new AgroalDataSourceConfigurationSupplier()
 							.dataSourceImplementation(DataSourceImplementation.AGROAL).metricsEnabled(false)
@@ -264,24 +274,11 @@ public class ConnectionManager {
 													.principal(new NamePrincipal(username))
 													.credential(new SimplePassword(password))));
 					AgroalDataSource agroaldataSource = AgroalDataSource.from(configuration);
-					flywayMigrate(agroaldataSource);
-
-					// Uni.createFrom().item(() -> {
-					// agroaldataSource.close();
-					// return null;
-					// }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool())
-					// .subscribe().with(
-					// unused -> {
-					// // Success callback
-					// logger.debug("DataSource closed successfully");
-					// },
-					// failure -> {
-					// // Failure callback
-					// logger.warn("Error closing DataSource: ", failure);
-
-					// });
-
-					return tenantDatabaseName;
+					if (flywayValidateAndMigrate(agroaldataSource, flywayMigrateAtStart, tenantidvalue, tenantDatabaseName)){
+						return tenantDatabaseName;
+					} else {
+						throw new Exception("Failed to validate or migrate database for tenant " + tenantidvalue);
+					}
 				}));
 
 	}
@@ -320,25 +317,37 @@ public class ConnectionManager {
 				.execute(Tuple.of(tenantidvalue, databasename)).onItem().ignore().andContinueWithNull();
 	}
 
-	public Boolean flywayMigrate(DataSource tenantDataSource) {
-
+	public Boolean flywayValidateAndMigrate(DataSource tenantDataSource, boolean migrate, String tenant, String tenantDatabaseName) {
+		logger.info("Starting Flyway validation and migration for tenant '" + tenant + "', database '" + tenantDatabaseName + "'");
 		FlywayContainerProducer flywayProducer = Arc.container().instance(FlywayContainerProducer.class).get();
 		FlywayContainer flywayContainer = flywayProducer.createFlyway(tenantDataSource, "<default>", true, true);
-		Flyway flyway = flywayContainer.getFlyway();
-		try {
-			flyway.migrate();
-		} catch (Exception e) {
-			logger.warn("failed to create tenant database attempting repair", e);
+		Flyway flyway = Flyway.configure()
+				.configuration(flywayContainer.getFlyway().getConfiguration())
+				.validateOnMigrate(flywayValidateOnMigrate)
+				.load();
+
+		if (migrate) {
 			try {
-				flyway.repair();
-				flyway.migrate();
-			} catch (Exception e1) {
-				logger.error("repair failed", e);
-				return false;
+				MigrateResult result = flyway.migrate();
+				if (result.success) {
+					logger.info("Flyway migration successful for tenant '" + tenant + "', database '" + tenantDatabaseName + "'. Migrations applied: " + result.migrationsExecuted);
+				} else {
+					logger.error("Flyway migration failed for tenant '" + tenant + "', database '" + tenantDatabaseName + "'. Migrations applied before failure: " + result.migrationsExecuted);
+					return false;
+				}
+			} catch (Exception e) {
+				logger.warn("Failed to create tenant database - attempting repair", e);
+				try {
+					flyway.repair();
+					flyway.migrate();
+				} catch (Exception e1) {
+					logger.error("FlyWay database repair failed for tenant '" + tenant + "', database: '" + tenantDatabaseName + "'", e1);
+					return false;
+				}
 			}
-
+		} else {
+			logger.info("FlyWay migration disabled for all datasources; tenant '" + tenant + "', database '" + tenantDatabaseName + "'.");
 		}
-
 		return true;
 	}
 
