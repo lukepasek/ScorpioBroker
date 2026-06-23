@@ -80,6 +80,9 @@ public class ConnectionManager {
 	@ConfigProperty(name = "quarkus.transaction-manager.default-transaction-timeout")
 	Duration connectionTime;
 
+	@ConfigProperty(name = "quarkus.application.name")
+	String applicationName;
+
 	@ConfigProperty(name = "pool.minsize")
 	int minsize;
 	@ConfigProperty(name = "pool.maxsize")
@@ -263,8 +266,10 @@ public class ConnectionManager {
 			options.setConnectionTimeout((int) connectionTime.getSeconds());
 			options.setConnectionTimeoutUnit(TimeUnit.SECONDS);
 
+			String clientName = applicationName + ":" + tenant;
 			PgPool pool = PgPool.pool(vertx, PgConnectOptions.fromUri(reactiveBaseUrl + finalDataBase).setUser(username)
-					.setPassword(password).setCachePreparedStatements(true), options);
+					.setPassword(password).setCachePreparedStatements(true)
+					.addProperty("application_name", clientName), options);
 
 			tenant2Client.put(tenant, pool);
 			return pool;
@@ -282,7 +287,9 @@ public class ConnectionManager {
 				.transform(Unchecked.function(tenantDatabaseName -> {
 					logger.debug("Creating data source for tenant '" + tenantidvalue + "', database '" + tenantDatabaseName + "'");
 
-					String tenantJdbcURL = DBUtil.databaseURLFromPostgresJdbcUrl(jdbcBaseUrl, tenantDatabaseName);
+					String clientName = applicationName + ":" + tenantidvalue;
+					String tenantJdbcURL = DBUtil.databaseURLFromPostgresJdbcUrl(jdbcBaseUrl, tenantDatabaseName, clientName);
+
 					AgroalDataSourceConfigurationSupplier configuration = new AgroalDataSourceConfigurationSupplier()
 							.dataSourceImplementation(DataSourceImplementation.AGROAL).metricsEnabled(false)
 							.connectionPoolConfiguration(
