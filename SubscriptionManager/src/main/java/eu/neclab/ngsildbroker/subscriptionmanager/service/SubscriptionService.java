@@ -79,6 +79,7 @@ import io.vertx.mqtt.MqttClientOptions;
 import io.vertx.mutiny.core.Vertx;
 import io.vertx.mutiny.core.buffer.Buffer;
 import io.vertx.mutiny.ext.web.client.HttpRequest;
+import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.mutiny.ext.web.client.WebClient;
 import io.vertx.mutiny.mqtt.MqttClient;
 import io.vertx.mutiny.sqlclient.Row;
@@ -137,6 +138,14 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 
 	@ConfigProperty(name = "scorpio.subscription.notification.worker-thread", defaultValue = "false")
 	boolean notificationOnWorkerThread;
+
+	/**
+	 * Connect timeout of the HTTP client used for notifications, query-manager calls and remote
+	 * subscriptions. The Vert.x default of 60 s let one unreachable notification endpoint hold
+	 * its ENTITY records unacknowledged long enough to fail the Kafka channel's liveness check.
+	 */
+	@ConfigProperty(name = "scorpio.subscription.http.connect-timeout-ms", defaultValue = "5000")
+	int httpConnectTimeoutMs;
 
 	private String ALL_TYPES_SUB;
 
@@ -392,7 +401,8 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 	void startup() {
 		logger.info("Starting SubscriptionService initialization - loading subscriptions and registries");		
 
-		this.webClient = WebClient.create(vertx);
+		this.webClient = WebClient.create(vertx, new WebClientOptions().setConnectTimeout(httpConnectTimeoutMs));
+		logger.info("HTTP client connect timeout: {} ms", httpConnectTimeoutMs);
 		ALL_TYPES_SUB = NGSIConstants.NGSI_LD_DEFAULT_PREFIX + allTypeSubType;
 		Uni<Void> loadSubs = subDAO.loadSubscriptions().onItem().transformToUni(subs -> {
 			List<Uni<Tuple4<String, Map<String, Object>, String, Context>>> unis = Lists.newArrayList();
