@@ -147,6 +147,9 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 	@ConfigProperty(name = "scorpio.subscription.http.connect-timeout-ms", defaultValue = "5000")
 	int httpConnectTimeoutMs;
 
+	@ConfigProperty(name = "scorpio.subscription.http.request-timeout-ms", defaultValue = "5000")
+	int httpRequestTimeoutMs;
+
 	private String ALL_TYPES_SUB;
 
 	private Table<String, SubscriptionRemoteHost, Set<String>> tenant2RemoteHost2SubIds = HashBasedTable.create();
@@ -402,7 +405,8 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 		logger.info("Starting SubscriptionService initialization - loading subscriptions and registries");		
 
 		this.webClient = WebClient.create(vertx, new WebClientOptions().setConnectTimeout(httpConnectTimeoutMs));
-		logger.info("HTTP client connect timeout: {} ms", httpConnectTimeoutMs);
+		logger.info("HTTP client connect timeout: {} ms, request timeout: {} ms", httpConnectTimeoutMs,
+				httpRequestTimeoutMs);
 		ALL_TYPES_SUB = NGSIConstants.NGSI_LD_DEFAULT_PREFIX + allTypeSubType;
 		Uni<Void> loadSubs = subDAO.loadSubscriptions().onItem().transformToUni(subs -> {
 			List<Uni<Tuple4<String, Map<String, Object>, String, Context>>> unis = Lists.newArrayList();
@@ -1388,6 +1392,7 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 								toSend = webClient.postAbs(notificationParam.getEndPoint().getUri().toString())
 										.putHeaders(SubscriptionTools.getHeaders(notificationParam,
 												potentialSub.getSubscription().getOtherHead()))
+										.timeout(httpRequestTimeoutMs)
 										.sendBuffer(Buffer.buffer(JsonUtils.toPrettyString(notification))).onFailure()
 										.retry().atMost(3).onItem().transformToUni(result -> {
 											int statusCode = result.statusCode();
@@ -1620,7 +1625,8 @@ public class SubscriptionService implements CSourceHandler, BaseRequestHandler {
 	private Uni<List<Map<String, Object>>> queryFromSubscription(SubscriptionRequest request, String tenant,
 			Set<String> idsTBU, Map<String, List<Map<String, Object>>> prevPayloadToUse,
 			Map<String, List<Map<String, Object>>> payloadToUse) {
-		HttpRequest<Buffer> req = webClient.postAbs(queryServiceUrl + NGSIConstants.ENDPOINT_BATCH_QUERY);
+		HttpRequest<Buffer> req = webClient.postAbs(queryServiceUrl + NGSIConstants.ENDPOINT_BATCH_QUERY)
+				.timeout(httpRequestTimeoutMs);
 		Map<String, Object> queryBody = request.getAsQueryBody(idsTBU, microServiceUtils.getContextServerURL());
 
 		req = req.addQueryParam(NGSIConstants.QUERY_PARAMETER_DO_NOT_COMPACT, "true");
